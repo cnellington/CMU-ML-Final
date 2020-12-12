@@ -312,7 +312,10 @@ class EmotionVAE:
         return encodings
     
     def decode(self, inputs):
-        decoder = self.get_decoder()
-        decodings = decoder.predict(inputs)
+        recon_decoder = self.get_recon_decoder()
+        recon = recon_decoder.predict(inputs)
+
+        emotion_decoder = self.get_emotion_decoder()
+        emotion = emotion_decoder.predict(inputs)
         
-        return decodings
+        return recon, emotion
