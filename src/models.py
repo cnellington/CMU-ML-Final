@@ -68,6 +68,9 @@ class AE:
                                  callbacks=callbacks)
         
         return history
+
+    def predict(self, inputs):
+        return self.model.predict(inputs)
         
     def get_encoder(self):
         encoder = Model(inputs=self.model.get_layer('encoderAE').input,
@@ -177,6 +180,9 @@ class VAE:
                                  callbacks=callbacks)
         
         return history
+
+    def predict(self, inputs):
+        return self.model.predict(inputs)
         
     def get_encoder(self):
         encoder = Model(inputs=self.model.input,
@@ -283,6 +289,9 @@ class EmotionVAE:
                                  callbacks=callbacks)
         
         return history
+
+    def predict(self, inputs):
+        return self.model.predict(inputs)
         
     def get_encoder(self):
         encoder = Model(inputs=self.model.input,
