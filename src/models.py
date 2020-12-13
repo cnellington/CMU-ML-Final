@@ -25,6 +25,96 @@ from tensorflow.keras.regularizers import L1
 from tensorflow.keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
 import tensorflow_probability as tfp
 
+# Baseline CNN for Emotion Detection
+class EmotionCNN:
+    def __init__(self):
+        super(EmotionCNN, self).__init__()
+
+        # Input layer
+        input_img = Input(shape=(48,48,1), name='input_img')
+
+        # Convolution Layers
+        h = Conv2D(16, (3,3), padding='same', activation='relu')(input_img)
+        h = MaxPooling2D((2,2))(h)
+        h = Conv2D(32, (3,3), padding='same', activation='relu')(h)
+        h = MaxPooling2D((2,2))(h)
+        h = Conv2D(64, (3,3), padding='same', activation='relu')(h)
+        h = MaxPooling2D((2,2))(h)
+        h = Flatten()(h)
+        h = Dense(10, name='emotion_pred')(h)
+
+        # Define full model
+        self.model = Model(inputs=input_img, outputs=h, name='EmotionCNN')
+
+        # Compile model
+        self.model.compile(optimizer=Adam(), loss=categorical_crossentropy)
+
+    def fit(self, inputs, labels, epochs, batch_size, val_data=None, workers=1, callbacks=None):
+        history = self.model.fit(inputs, labels, batch_size=batch_size, epochs=epochs,
+                                 validation_data=val_data, workers=workers,
+                                 callbacks=callbacks)
+        
+        return history
+
+    def predict(self, inputs):
+        return self.model.predict(inputs)
+
+    def summary(self):
+        self.model.summary()
+
+
+# CNN for Joint Bounding Box and Emotion Detection
+class EmotionBBCNN:
+    def __init__(self):
+        super(EmotionBBCNN, self).__init__()
+
+        # Input layer
+        input_img = Input(shape=(48,48,1), name='input_img')
+
+        # Convolution Layers
+        h = Conv2D(32, (3,3), padding='same', activation='relu')(input_img)
+        h = MaxPooling2D((2,2))(h)
+        h = Conv2D(64, (3,3), padding='same', activation='relu')(h)
+        h = MaxPooling2D((2,2))(h)
+        h = Conv2D(128, (3,3), padding='same', activation='relu')(h)
+        h = MaxPooling2D((2,2))(h)
+        h = Flatten()(h)
+
+        # Emotion prediction
+        emotion = Dense(10, name='emotion_pred')(h)
+
+        # Bounding box prediction
+        bb = Dense(4, name='bb_pred')(h)
+
+        # Define full model
+        self.model = Model(inputs=input_img, outputs=[emotion, bb], name='EmotionBBCNN')
+
+        # Compile model
+        losses = {'emotion_pred': emotion,
+                  'bb_pred': bb}
+
+        # TODO: Need to check how to adjust the weights to match scale
+        loss_weights = {'emotion_pred': 1.0,
+                        'bb_pred': 1.0}
+
+        metrics = {'emotion_pred': categorical_accuracy}
+
+        self.model.compile(optimizer=Adam(), loss=losses, loss_weights=loss_weights, metrics=metrics)
+
+    def fit(self, inputs, labels, epochs, batch_size, val_data=None, workers=1, callbacks=None):
+        history = self.model.fit(inputs, labels, batch_size=batch_size, epochs=epochs,
+                                 validation_data=val_data, workers=workers,
+                                 callbacks=callbacks)
+        
+        return history
+
+    def predict(self, inputs):
+        return self.model.predict(inputs)
+
+    def summary(self):
+        self.model.summary()
+
+
 # AutoEncoder
 class AE:
     def __init__(self):
@@ -328,3 +418,138 @@ class EmotionVAE:
         emotion = emotion_decoder.predict(inputs)
         
         return recon, emotion
+
+# Variational AutoEncoder (VAE) with Emotion + Bounding Box Decoders
+# Note: Providing a beta term makes it a beta-VAE
+# Note: Linear option changes emotion decoder to be linear for interpretability
+class EmotionBBVAE:
+    def __init__(self, latent_dims, beta=1, linear=False, sparse=False):
+        super(EmotionBBVAE, self).__init__()
+        self.latent_dims = latent_dims
+
+        # Encoder
+        encoder_input = Input(shape=(48,48,1), name='encoder_input')
+        e = Conv2D(16, (3,3), padding='same', activation='relu')(encoder_input)
+        e = MaxPooling2D((2,2))(e)
+        e = Conv2D(32, (3,3), padding='same', activation='relu')(e)
+        e = MaxPooling2D((2,2))(e)
+        e = Conv2D(64, (3,3), padding='same', activation='relu')(e)
+        e = MaxPooling2D((2,2))(e)
+        e = Flatten()(e)
+
+        z_mean = Dense(self.latent_dims, name='z_mean')(e)
+        z_log_var = Dense(self.latent_dims, name='z_log_var')(e)
+        z = Sampling(name='Sampling')((z_mean, z_log_var))
+
+        self.encoder = Model(inputs=encoder_input, outputs=z, name='encoderVAE')
+
+        # Reconstruction Decoder
+        recon_input = Input(shape=(latent_dims,), name='recon_input')
+        d1 = Dense(6*6*64, activation='relu')(recon_input)
+        d1 = Reshape(target_shape=(6,6,64))(d1)
+        d1 = Conv2DTranspose(64, (3,3), strides=2, padding='same', activation='relu')(d1)
+        d1 = Conv2DTranspose(32, (3,3), strides=2, padding='same', activation='relu')(d1)
+        d1 = Conv2DTranspose(16, (3,3), strides=2, padding='same', activation='relu')(d1)
+        d1 = Conv2DTranspose(1, (3,3), padding='same', activation='relu', name='recon')(d1)
+
+        self.recon_decoder = Model(inputs=recon_input, outputs=d1, name='reconDecoderVAE')
+        
+        # Emotion Decoder
+        emotion_input = Input(shape=(latent_dims,), name='emotion_input')        
+
+        if linear:
+            if sparse:
+                d2 = Dense(10, activation='softmax', name='emotion_pred',
+                           kernel_regularizer=L1(l1=0.01))(emotion_input)
+            else:
+                d2 = Dense(10, activation='softmax', name='emotion_pred')(emotion_input)
+
+        else:
+            d2 = Dense(64, activation='relu')(emotion_input)
+            d2 = Dense(32, activation='relu')(d2)
+            d2 = Dense(10, activation='softmax', name='emotion_pred')(d2)
+            
+        self.emotion_decoder = Model(inputs=emotion_input, outputs=d2, name='emotionDecoderVAE')
+
+        # Bounding Box Decoder
+        bb_input = Input(shape=(latent_dims,), name='bb_input')
+        d3 = Dense(32, activation='relu')(bb_input)
+        d3 = Dense(4, name='bb_pred')(d3)
+
+        self.bb_decoder = Model(inputs=bb_input, outputs=d3, name='bbDecoderVAE')
+
+        # Define full model
+        output_img = self.recon_decoder(z)
+        output_emotion = self.emotion_decoder(z)
+        output_bb = self.bb_decoder(z)
+        self.model = Model(inputs=encoder_input, outputs=[output_img, output_emotion, output_bb], name='EmotionBBVAE')
+        
+        # Add KL loss
+        kl_loss = -0.5 * tf.reduce_mean(z_log_var - tf.square(z_mean) - tf.exp(z_log_var) + 1) * beta
+        self.model.add_loss(kl_loss)
+
+        # Compile model
+        losses = {'reconDecoderVAE': scaled_mse,
+                  'emotionDecoderVAE': categorical_crossentropy,
+                  'bbDecoderVAE': mean_squared_error}
+
+        loss_weights = {'reconDecoderVAE': 1.0,
+                        'emotionDecoderVAE': 1.5,
+                        'bbDecoderVAE': 1.0}
+
+        metrics = {'emotionDecoderVAE': categorical_accuracy}
+
+        self.model.compile(optimizer=Adam(), loss=losses, loss_weights=loss_weights, metrics=metrics)
+        
+    def fit(self, inputs, labels, epochs, batch_size, val_data=None, workers=1, callbacks=None):
+        history = self.model.fit(inputs, labels, batch_size=batch_size, epochs=epochs,
+                                 validation_data=val_data, workers=workers,
+                                 callbacks=callbacks)
+        
+        return history
+
+    def predict(self, inputs):
+        return self.model.predict(inputs)
+        
+    def get_encoder(self):
+        encoder = Model(inputs=self.model.input,
+                        outputs=self.model.get_layer('Sampling').output)
+        
+        return encoder
+    
+    def get_recon_decoder(self):
+        recon_decoder = Model(inputs=self.model.get_layer('reconDecoderVAE').input,
+                              outputs=self.model.get_layer('reconDecoderVAE').output)
+        
+        return recon_decoder
+
+    def get_emotion_decoder(self):
+        emotion_decoder = Model(inputs=self.model.get_layer('emotionDecoderVAE').input,
+                                outputs=self.model.get_layer('emotionDecoderVAE').output)
+        
+        return emotion_decoder
+
+    def get_bb_decoder(self):
+        bb_decoder = Model(inputs=self.model.get_layer('bbDecoderVAE').input,
+                           outputs=self.model.get_layer('bbDecoderVAE').output)
+        
+    def summary(self):
+        self.model.summary()
+        
+    def encode(self, inputs):
+        encoder = self.get_encoder()
+        encodings = encoder.predict(inputs)
+        
+        return encodings
+    
+    def decode(self, inputs):
+        recon_decoder = self.get_recon_decoder()
+        recon = recon_decoder.predict(inputs)
+
+        emotion_decoder = self.get_emotion_decoder()
+        emotion = emotion_decoder.predict(inputs)
+
+        bb_decoder = self.get_bb_decoder()
+        bb = bb_decoder.predict(inputs)
+        
+        return recon, emotion, bb
